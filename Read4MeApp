@@ -1,0 +1,200 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox
+from tkinter import ttk
+import threading
+import pyttsx3
+import cv2
+import pytesseract
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+import os
+import pickle
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from ttkthemes import ThemedTk
+import dropbox
+import boto3
+from io import BytesIO
+
+# Function to show a tooltip
+def create_tooltip(widget, text):
+    tooltip = ttk.Tooltip(widget, text=text)
+    tooltip.grid(row=0, column=0, padx=5, pady=5)
+
+# Function to start Real-Time OCR
+def start_real_time_ocr():
+    try:
+        cap = cv2.VideoCapture(0)  # Open webcam
+        if not cap.isOpened():
+            raise Exception("Camera not found or failed to open.")
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            text = pytesseract.image_to_string(gray)
+            cv2.putText(frame, text, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+            cv2.imshow('OCR', frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+        cap.release()
+        cv2.destroyAllWindows()
+    except Exception as e:
+        messagebox.showerror("Error", f"Real-Time OCR failed: {str(e)}")
+
+# Function to start Background Reading
+def background_read(text):
+    engine = pyttsx3.init()
+    engine.say(text)
+    engine.runAndWait()
+
+def start_background_reading():
+    try:
+        text = text_display.get(1.0, tk.END)  # Get text from text box
+        if text.strip() == "":
+            raise ValueError("No text available to read.")
+        reading_thread = threading.Thread(target=background_read, args=(text,))
+        reading_thread.start()
+    except Exception as e:
+        messagebox.showerror("Error", f"Background reading failed: {str(e)}")
+
+# Function to authenticate with Google Drive
+def authenticate_google_drive():
+    try:
+        creds = None
+        if os.path.exists('token.pickle'):
+            with open('token.pickle', 'rb') as token:
+                creds = pickle.load(token)
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+                creds = flow.run_local_server(port=0)
+            with open('token.pickle', 'wb') as token:
+                pickle.dump(creds, token)
+        return build('drive', 'v3', credentials=creds)
+    except Exception as e:
+        messagebox.showerror("Error", f"Cloud authentication failed: {str(e)}")
+
+# Function to upload a file to Google Drive
+def upload_to_google_drive(file_path, file_name):
+    try:
+        service = authenticate_google_drive()
+        file_metadata = {'name': file_name}
+        media = MediaFileUpload(file_path, mimetype='text/plain')
+        file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        messagebox.showinfo("Success", f"File uploaded to Google Drive: {file_name}")
+    except Exception as e:
+        messagebox.showerror("Error", f"File upload failed: {str(e)}")
+
+# Function to download files from Google Drive
+def download_from_google_drive(file_id, save_path):
+    try:
+        service = authenticate_google_drive()
+        request = service.files().get_media(fileId=file_id)
+        with open(save_path, 'wb') as f:
+            downloader = MediaIoBaseDownload(f, request)
+            done = False
+            while done is False:
+                status, done = downloader.next_chunk()
+        messagebox.showinfo("Success", f"File downloaded to {save_path}")
+    except Exception as e:
+        messagebox.showerror("Error", f"File download failed: {str(e)}")
+
+# Function to authenticate and upload to Dropbox
+def upload_to_dropbox(file_path):
+    try:
+        dbx = dropbox.Dropbox('YOUR_ACCESS_TOKEN')
+        with open(file_path, "rb") as f:
+            dbx.files_upload(f.read(), '/' + os.path.basename(file_path))
+        messagebox.showinfo("Success", f"File uploaded to Dropbox: {os.path.basename(file_path)}")
+    except Exception as e:
+        messagebox.showerror("Error", f"Dropbox upload failed: {str(e)}")
+
+# Function to download from Dropbox
+def download_from_dropbox(file_path, save_path):
+    try:
+        dbx = dropbox.Dropbox('YOUR_ACCESS_TOKEN')
+        dbx.files_download_to_file(save_path, '/' + file_path)
+        messagebox.showinfo("Success", f"File downloaded from Dropbox to {save_path}")
+    except Exception as e:
+        messagebox.showerror("Error", f"Dropbox download failed: {str(e)}")
+
+# Function to upload to AWS S3
+def upload_to_s3(file_path, bucket_name):
+    try:
+        s3 = boto3.client('s3')
+        with open(file_path, 'rb') as f:
+            s3.upload_fileobj(f, bucket_name, os.path.basename(file_path))
+        messagebox.showinfo("Success", f"File uploaded to S3: {os.path.basename(file_path)}")
+    except Exception as e:
+        messagebox.showerror("Error", f"S3 upload failed: {str(e)}")
+
+# Function to download from AWS S3
+def download_from_s3(file_name, bucket_name, save_path):
+    try:
+        s3 = boto3.client('s3')
+        s3.download_file(bucket_name, file_name, save_path)
+        messagebox.showinfo("Success", f"File downloaded from S3 to {save_path}")
+    except Exception as e:
+        messagebox.showerror("Error", f"S3 download failed: {str(e)}")
+
+# Tkinter UI Setup with ThemedTk
+root = ThemedTk(theme="arc")
+root.title("Accessible Document Reader")
+
+# Text display area with a label
+text_frame = ttk.LabelFrame(root, text="Text Display", padding=(10, 5))
+text_frame.grid(row=0, column=0, padx=10, pady=10)
+
+text_display = tk.Text(text_frame, height=15, width=50)
+text_display.grid(row=0, column=0)
+
+# Start Real-Time OCR Button with Tooltip
+ocr_button = ttk.Button(root, text="Start Real-Time OCR", command=start_real_time_ocr)
+ocr_button.grid(row=1, column=0, pady=5)
+create_tooltip(ocr_button, "Click to start real-time OCR using your webcam.")
+
+# Start Background Reading Button with Tooltip
+read_button = ttk.Button(root, text="Start Background Reading", command=start_background_reading)
+read_button.grid(row=2, column=0, pady=5)
+create_tooltip(read_button, "Click to start reading the text aloud in the background.")
+
+# Cloud Sync Section with Label and Buttons
+cloud_sync_frame = ttk.LabelFrame(root, text="Cloud Sync", padding=(10, 5))
+cloud_sync_frame.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
+
+upload_button = ttk.Button(cloud_sync_frame, text="Upload to Google Drive", command=lambda: upload_file())
+upload_button.grid(row=0, column=0, pady=5, padx=5)
+create_tooltip(upload_button, "Upload a selected file to Google Drive.")
+
+download_button = ttk.Button(cloud_sync_frame, text="Download from Google Drive", command=lambda: download_file())
+download_button.grid(row=0, column=1, pady=5, padx=5)
+create_tooltip(download_button, "Download a file from Google Drive using its file ID.")
+
+# File Dialogs for Upload/Download
+def upload_file():
+    file_path = filedialog.askopenfilename(title="Select File to Upload")
+    if file_path:
+        file_name = os.path.basename(file_path)
+        upload_to_google_drive(file_path, file_name)
+
+def download_file():
+    file_id = filedialog.askstring("File ID", "Enter File ID for Download")
+    save_path = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text Files", "*.txt")])
+    if file_id and save_path:
+        download_from_google_drive(file_id, save_path)
+
+# Error handling and Progress Indicators
+def show_progress_bar(action):
+    progress = ttk.Progressbar(root, orient="horizontal", length=200, mode='indeterminate')
+    progress.grid(row=4, column=0, pady=10)
+    progress.start()
+    action()
+    progress.stop()
+    progress.grid_forget()
+
+# Start the UI
+root.mainloop()
